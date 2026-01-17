@@ -276,6 +276,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               _buildStatsOverview(profile),
               const SizedBox(height: 20),
 
+              // Card Analytics
+              _buildAnalyticsCard(),
+              const SizedBox(height: 20),
+
               // Tarefas Ativas
               _buildTasksSection(),
               const SizedBox(height: 20),
@@ -612,6 +616,69 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildAnalyticsCard() {
+    return GestureDetector(
+      onTap: () => context.push('/analytics'),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F1115),
+          border: Border.all(
+            color: AppColors.magenta.withValues(alpha: 0.3),
+            width: 1,
+          ),
+          borderRadius: const BorderRadius.all(Radius.circular(8)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.magenta.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.analytics,
+                color: AppColors.magenta,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'ANALYTICS & INSIGHTS',
+                    style: GoogleFonts.orbitron(
+                      color: AppColors.magenta,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Visualize seu progresso e estatísticas detalhadas',
+                    style: GoogleFonts.shareTechMono(
+                      color: Colors.white70,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(
+              Icons.arrow_forward_ios,
+              color: AppColors.magenta,
+              size: 16,
+            ),
+          ],
+        ),
       ),
     );
   }

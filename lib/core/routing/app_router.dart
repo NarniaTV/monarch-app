@@ -19,6 +19,7 @@ import '../../features/penalty/presentation/penalty_zone_screen.dart';
 import '../../features/shadows/presentation/shadow_inventory_screen.dart';
 import '../../features/shadows/presentation/trophies_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
+import '../../features/analytics/presentation/analytics_screen.dart';
 import '../../services/auth_service.dart';
 
 /// Provider para verificar estado de autenticação
@@ -156,6 +157,10 @@ class AppRouter {
         GoRoute(
           path: '/profile',
           builder: (context, state) => const ProfileScreen(),
+        ),
+        GoRoute(
+          path: '/analytics',
+          builder: (context, state) => const AnalyticsScreen(),
         ),
       ],
     );
