@@ -79,13 +79,30 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   }
 
   /// Verifica hábitos e gera novas tarefas se necessário
+  /// Só executa se online (não bloqueia quando offline)
   Future<void> _checkHabitTasks() async {
     try {
+      // Verifica se está online primeiro (timeout rápido)
+      final isOnline = await _connectivityService.isOnline().timeout(
+        const Duration(milliseconds: 300),
+        onTimeout: () => false,
+      );
+      
+      if (!isOnline) {
+        print('[DASHBOARD] Offline - pulando verificação de hábitos');
+        return; // Não executa quando offline para evitar delays
+      }
+      
       final monitoringService = TaskMonitoringService();
-      await monitoringService.checkAndGenerateTasksForAllHabits();
+      await monitoringService.checkAndGenerateTasksForAllHabits().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          print('[DASHBOARD] ⚠️ Timeout ao verificar hábitos');
+        },
+      );
     } catch (e) {
       // Falha silenciosa - não afeta a experiência do usuário
-      debugPrint('Erro ao verificar hábitos: $e');
+      debugPrint('[DASHBOARD] ⚠️ Erro ao verificar hábitos: $e');
     }
   }
 
@@ -111,25 +128,30 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           // Conteúdo
           SafeArea(
             bottom: false,
-            child: FutureBuilder<UserProfileModel?>(
-              future: UserRepository().getUser(user.uid),
+              child: FutureBuilder<UserProfileModel?>(
+              future: UserRepository().getUser(user.uid).timeout(
+                const Duration(seconds: 3),
+                onTimeout: () {
+                  print('[DASHBOARD] ⚠️ Timeout ao carregar perfil (offline?) - usando perfil padrão');
+                  return null; // Retorna null para usar perfil padrão
+                },
+              ),
               builder: (context, snapshot) {
+                // Se está carregando, mostra loading apenas brevemente
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(
                     child: CircularProgressIndicator(color: AppColors.cyan),
                   );
                 }
 
-                if (!snapshot.hasData) {
-                  return Center(
-                    child: Text(
-                      'Erro ao carregar perfil',
-                      style: GoogleFonts.shareTechMono(color: Colors.red),
-                    ),
-                  );
-                }
-
-                final profile = snapshot.data!;
+                // Se não tem dados ou deu erro, usa perfil padrão (não quebra o app)
+                final profile = snapshot.data ?? UserProfileModel(
+                  userId: user.uid,
+                  email: user.email ?? '',
+                  nickname: user.displayName ?? 'Usuario',
+                  createdAt: DateTime.now(),
+                );
+                
                 return _buildDashboardContent(user, profile);
               },
             ),

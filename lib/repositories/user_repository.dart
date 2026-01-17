@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_profile_model.dart';
 
@@ -5,16 +6,31 @@ import '../models/user_profile_model.dart';
 class UserRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  /// Busca perfil do usuário
+  /// Busca perfil do usuário - OFFLINE-RESILIENTE
+  /// Retorna null se offline (não quebra o app)
   Future<UserProfileModel?> getUser(String userId) async {
     try {
-      final doc = await _firestore.collection('users').doc(userId).get();
+      final doc = await _firestore
+          .collection('users')
+          .doc(userId)
+          .get()
+          .timeout(const Duration(seconds: 5), onTimeout: () {
+            print('[USER REPO] ⚠️ Timeout ao buscar perfil (offline?) - retornando null');
+            throw TimeoutException('Timeout ao buscar perfil');
+          });
+      
       if (doc.exists) {
         return UserProfileModel.fromFirestore(doc);
       }
       return null;
     } catch (e) {
-      throw Exception('Erro ao buscar usuário: $e');
+      // Se for timeout ou erro de rede, retorna null em vez de quebrar
+      if (e is TimeoutException || e.toString().contains('UNAVAILABLE') || e.toString().contains('network')) {
+        print('[USER REPO] ⚠️ Offline ou erro de rede ao buscar perfil - retornando null');
+        return null; // Não quebra o app quando offline
+      }
+      print('[USER REPO] ❌ Erro ao buscar perfil: $e');
+      return null; // Retorna null em vez de throw para não quebrar o app
     }
   }
 

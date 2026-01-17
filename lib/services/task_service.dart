@@ -47,59 +47,75 @@ class TaskService {
     }
 
     try {
-      // PASSO 1: Marca tarefa como completa PRIMEIRO (sempre funciona offline)
+      // PASSO 1: Repository é a fonte única de verdade - completa no Isar PRIMEIRO (ATOMIC)
+      // Isso garante que a tarefa seja marcada como completa instantaneamente
+      await _taskRepository.completeTask(task);
+      print('[TASK SERVICE] ✅ Tarefa completada no Isar: ${task.title}');
+      
       final updatedTask = task.copyWith(
         isCompleted: true,
         completedAt: DateTime.now(),
       );
       
-      // OFFLINE-FIRST: SEMPRE salva no Isar PRIMEIRO (fonte primária - funciona offline)
-      print('[TASK SERVICE] ✅ Salvando tarefa completada PRIMEIRO no Isar: ${updatedTask.title}');
-      await _syncService.saveTaskLocally(updatedTask);
-      
-      // PASSO 2: Atualiza stats e XP (funciona offline - salva localmente)
-      final levelUpInfo = await _statsService.updateStatsOnTaskComplete(
-        statType: task.statType,
-        taskRank: task.rank,
-        isPenaltyZoneActive: false, // Simplificado para funcionar offline
-      ).catchError((e) {
-        print('[TASK SERVICE] ⚠️ Erro ao atualizar stats (continuando): $e');
-        return null; // Retorna null se falhar
-      });
-
-      // PASSO 3: Se online, tenta operações que dependem de Firestore (não bloqueia se falhar)
+      // PASSO 2: Verifica status online RÁPIDO (não bloqueia - timeout curto)
       final isOnline = await _syncService.isOnline().timeout(
-        const Duration(milliseconds: 300),
-        onTimeout: () => false,
-      );
+        const Duration(milliseconds: 200),
+        onTimeout: () {
+          print('[TASK SERVICE] Timeout ao verificar online (assumindo OFFLINE)');
+          return false;
+        },
+      ).catchError((e) {
+        print('[TASK SERVICE] Erro ao verificar online (assumindo OFFLINE): $e');
+        return false;
+      });
       
+      // PASSO 3: Atualiza stats e XP em background (não bloqueia quando offline)
+      LevelUpInfo? levelUpInfo;
       if (isOnline) {
-        // Verifica Penalty Zone (só se online)
-        _userRepository.getUser(user.uid).then((profile) {
-          // Recalcula stats se necessário (opcional)
-        }).catchError((e) {
-          print('[TASK SERVICE] ⚠️ Erro ao buscar perfil: $e');
-        });
-        
-        // Atualiza no Firestore em background (não bloqueia)
-        _taskRepository.updateTask(updatedTask).catchError((e) {
-          print('[TASK SERVICE] ⚠️ Erro ao atualizar no Firestore (já salvo localmente): $e');
-        });
+        // Só tenta atualizar stats se online (evita bloqueios offline)
+        try {
+          final profile = await _userRepository.getUser(user.uid).timeout(
+            const Duration(seconds: 1),
+            onTimeout: () => null,
+          ).catchError((e) => null);
+          
+          final isPenaltyZone = profile?.penaltyMessage != null;
+          
+          levelUpInfo = await _statsService.updateStatsOnTaskComplete(
+            statType: task.statType,
+            taskRank: task.rank,
+            isPenaltyZoneActive: isPenaltyZone,
+          ).timeout(
+            const Duration(seconds: 2),
+            onTimeout: () {
+              print('[TASK SERVICE] ⚠️ Timeout ao atualizar stats (continuando)');
+              return null;
+            },
+          ).catchError((e) {
+            print('[TASK SERVICE] ⚠️ Erro ao atualizar stats (continuando): $e');
+            return null;
+          });
+        } catch (e) {
+          print('[TASK SERVICE] ⚠️ Erro ao atualizar stats (continuando): $e');
+        }
+      } else {
+        print('[TASK SERVICE] Offline - pulando atualização de stats (será feito depois)');
       }
 
-      // PASSO 4: Se tarefa linkada a objetivo e online, atualiza progresso (em background)
-      if (task.linkedObjectiveId != null && isOnline) {
+      // PASSO 4: Operações em background (não bloqueiam)
+      // Se tarefa linkada a objetivo, atualiza progresso (em background)
+      if (task.linkedObjectiveId != null) {
         _updateObjectiveProgress(user.uid, task.linkedObjectiveId!).catchError((e) {
           print('[TASK SERVICE] ⚠️ Erro ao atualizar objetivo (continuando): $e');
         });
       }
       
-      // FASE 1: Cancela notificação se existir (funciona offline)
-      await _notificationService.cancelNotification(task.id).catchError((e) {
+      // Cancela notificação se existir (funciona offline, não bloqueia)
+      _notificationService.cancelNotification(task.id).catchError((e) {
         print('[TASK SERVICE] ⚠️ Erro ao cancelar notificação: $e');
       });
       
-      // FASE 2: Deleta evento do Google Calendar (só se online e habilitado)
+      // Deleta evento do Google Calendar (só se online e habilitado, em background)
       if (isOnline && task.calendarEventId != null) {
         _calendarService.isCalendarEnabled().then((enabled) {
           if (enabled) {
@@ -112,7 +128,7 @@ class TaskService {
         });
       }
 
-      // FASE 7: Extrai sombra se tarefa for Rank C ou superior (só se online)
+      // Extrai sombra se tarefa for Rank C ou superior (só se online, em background)
       ShadowModel? extractedShadow;
       if (isOnline && (task.rank == TaskRank.a || task.rank == TaskRank.c || task.rank == TaskRank.d)) {
         _shadowService.extractShadowFromTask(updatedTask).then((shadow) {
@@ -128,6 +144,7 @@ class TaskService {
         extractedShadow: extractedShadow,
       );
     } catch (e) {
+      print('[TASK SERVICE] ❌ Erro ao completar tarefa: $e');
       throw Exception('Erro ao completar tarefa: $e');
     }
   }
@@ -202,62 +219,36 @@ class TaskService {
       throw Exception('Usuário não autenticado');
     }
 
-    // PASSO 1: SEMPRE salvar no Isar PRIMEIRO (fonte primária - funciona offline e online)
+    // PASSO 1: Garante que a tarefa tem um ID único (UUID)
     final uuid = const Uuid();
     final taskWithId = task.id.isEmpty ? task.copyWith(id: uuid.v4()) : task;
     
-    print('[TASK SERVICE] ✅ Salvando tarefa PRIMEIRO no Isar: ${taskWithId.title}');
-    await _syncService.saveTaskLocally(taskWithId); // ✅ SALVA PRIMEIRO AQUI
+    // PASSO 2: Repository é a fonte única de verdade - salva no Isar e sincroniza Firestore
+    // TaskRepository.createTask() já salva no Isar PRIMEIRO e sincroniza Firestore em background
+    await _taskRepository.createTask(taskWithId);
     
     // FASE 1: Agendar notificação se tarefa tiver data/hora (funciona offline)
     if (taskWithId.time != null) {
       await _notificationService.scheduleTaskNotification(taskWithId);
     }
     
-    // PASSO 2: Se online, sincroniza com Firestore em background (não bloqueia retorno)
-    final isOnline = await _syncService.isOnline().timeout(
-      const Duration(milliseconds: 500),
-      onTimeout: () => false,
-    );
-    
-    if (isOnline) {
-      // Sincroniza em background sem esperar
-      _taskRepository.createTask(taskWithId).then((createdTask) {
-        // Atualiza Isar com ID do Firestore se diferente
-        if (createdTask.id != taskWithId.id) {
-          _syncService.saveTaskLocally(createdTask).catchError((e) {
-            print('[TASK SERVICE] ⚠️ Erro ao atualizar Isar: $e');
-          });
-        }
-        
-        // FASE 2: Sincronizar com Google Calendar se usuário autorizou
-        _calendarService.isCalendarEnabled().then((enabled) {
-          if (enabled && taskWithId.time != null) {
-            _calendarService.syncTaskToCalendar(createdTask).then((eventId) {
-              if (eventId != null) {
-                final updatedTask = createdTask.copyWith(calendarEventId: eventId);
-                _taskRepository.updateTask(updatedTask).then((_) {
-                  _syncService.saveTaskLocally(updatedTask).catchError((e) {
-                    print('[TASK SERVICE] ⚠️ Erro ao salvar calendarEventId: $e');
-                  });
-                }).catchError((e) {
-                  print('[TASK SERVICE] ⚠️ Erro ao atualizar calendarEventId: $e');
-                });
-              }
-            }).catchError((e) {
-              print('[TASK SERVICE] ⚠️ Erro ao sincronizar Calendar: $e');
+    // FASE 2: Sincronizar com Google Calendar se usuário autorizou (em background)
+    _calendarService.isCalendarEnabled().then((enabled) {
+      if (enabled && taskWithId.time != null) {
+        _calendarService.syncTaskToCalendar(taskWithId).then((eventId) {
+          if (eventId != null) {
+            final updatedTask = taskWithId.copyWith(calendarEventId: eventId);
+            _taskRepository.updateTask(updatedTask).catchError((e) {
+              print('[TASK SERVICE] ⚠️ Erro ao atualizar calendarEventId: $e');
             });
           }
         }).catchError((e) {
-          print('[TASK SERVICE] ⚠️ Erro ao verificar Calendar: $e');
+          print('[TASK SERVICE] ⚠️ Erro ao sincronizar Calendar: $e');
         });
-        
-        print('[TASK SERVICE] ✅ Tarefa sincronizada com Firestore: ${taskWithId.title}');
-      }).catchError((e) {
-        print('[TASK SERVICE] ⚠️ Erro ao criar no Firestore (já salvo localmente): $e');
-        // Não interrompe - já foi salva no Isar
-      });
-    }
+      }
+    }).catchError((e) {
+      print('[TASK SERVICE] ⚠️ Erro ao verificar Calendar: $e');
+    });
     
     print('[TASK SERVICE] ✅ Tarefa criada e salva instantaneamente: ${taskWithId.title}');
   }
@@ -270,41 +261,49 @@ class TaskService {
     }
 
     try {
-      // OFFLINE-FIRST: SEMPRE salva no Isar PRIMEIRO (fonte primária)
-      await _syncService.saveTaskLocally(task);
+      // Repository é a fonte única de verdade - atualiza no Isar PRIMEIRO (ATOMIC)
+      await _taskRepository.updateTask(task);
       
-      // Se online, atualiza no Firestore também (em background)
-      final isOnline = await _syncService.isOnline();
-      if (isOnline) {
-        _taskRepository.updateTask(task).catchError((e) {
-          print('[TASK SERVICE] ⚠️ Erro ao atualizar no Firestore (já salvo localmente): $e');
+      // FASE 1: Reagendar notificação se tarefa tiver data/hora e não estiver completa (em background)
+      if (task.time != null && !task.isCompleted) {
+        // Cancela notificação antiga (se existir) e agenda nova (não bloqueia)
+        _notificationService.cancelNotification(task.id).then((_) {
+          _notificationService.scheduleTaskNotification(task).catchError((e) {
+            print('[TASK SERVICE] ⚠️ Erro ao agendar notificação: $e');
+          });
+        }).catchError((e) {
+          print('[TASK SERVICE] ⚠️ Erro ao cancelar notificação: $e');
+        });
+      } else {
+        // Cancela se não tiver mais horário ou estiver completa (não bloqueia)
+        _notificationService.cancelNotification(task.id).catchError((e) {
+          print('[TASK SERVICE] ⚠️ Erro ao cancelar notificação: $e');
         });
       }
       
-      // FASE 1: Reagendar notificação se tarefa tiver data/hora e não estiver completa
-      if (task.time != null && !task.isCompleted) {
-        // Cancela notificação antiga (se existir)
-        await _notificationService.cancelNotification(task.id);
-        
-        // Agenda nova notificação
-        await _notificationService.scheduleTaskNotification(task);
-      } else {
-        // Cancela se não tiver mais horário ou estiver completa
-        await _notificationService.cancelNotification(task.id);
-      }
-      
-      // FASE 2: Sincronizar com Google Calendar se usuário autorizou
-      if (await _calendarService.isCalendarEnabled() && !task.isCompleted) {
-        final eventId = await _calendarService.syncTaskToCalendar(task);
-        if (eventId != null && eventId != task.calendarEventId) {
-          // Atualiza tarefa com novo calendarEventId se mudou
-          final updatedTask = task.copyWith(calendarEventId: eventId);
-          await _taskRepository.updateTask(updatedTask);
+      // FASE 2: Sincronizar com Google Calendar se usuário autorizou (em background, não bloqueia)
+      _calendarService.isCalendarEnabled().then((enabled) {
+        if (enabled && !task.isCompleted) {
+          _calendarService.syncTaskToCalendar(task).then((eventId) {
+            if (eventId != null && eventId != task.calendarEventId) {
+              // Atualiza tarefa com novo calendarEventId se mudou (em background)
+              final updatedTask = task.copyWith(calendarEventId: eventId);
+              _taskRepository.updateTask(updatedTask).catchError((e) {
+                print('[TASK SERVICE] ⚠️ Erro ao atualizar calendarEventId: $e');
+              });
+            }
+          }).catchError((e) {
+            print('[TASK SERVICE] ⚠️ Erro ao sincronizar Calendar: $e');
+          });
+        } else if (task.calendarEventId != null) {
+          // Se desabilitou calendar ou tarefa está completa, deleta evento (em background)
+          _calendarService.deleteCalendarEvent(task.calendarEventId!).catchError((e) {
+            print('[TASK SERVICE] ⚠️ Erro ao deletar evento do Calendar: $e');
+          });
         }
-      } else if (task.calendarEventId != null) {
-        // Se desabilitou calendar ou tarefa está completa, deleta evento
-        await _calendarService.deleteCalendarEvent(task.calendarEventId!);
-      }
+      }).catchError((e) {
+        print('[TASK SERVICE] ⚠️ Erro ao verificar Calendar: $e');
+      });
     } catch (e) {
       throw Exception('Erro ao atualizar tarefa: $e');
     }
@@ -317,7 +316,11 @@ class TaskService {
       throw Exception('Usuário não autenticado');
     }
 
-    final isOnline = await _syncService.isOnline();
+    // Verifica online rapidamente (não bloqueia)
+    final isOnline = await _syncService.isOnline().timeout(
+      const Duration(milliseconds: 200),
+      onTimeout: () => false,
+    ).catchError((e) => false);
 
     try {
       // Busca tarefa do Isar PRIMEIRO (fonte primária)
@@ -333,26 +336,22 @@ class TaskService {
         }
       }
       
-      // FASE 2: Deleta evento do Google Calendar se existir (apenas se online)
-      if (task != null && task.calendarEventId != null && await _calendarService.isCalendarEnabled() && isOnline) {
-        try {
-          await _calendarService.deleteCalendarEvent(task.calendarEventId!);
-        } catch (e) {
-          print('[TASK SERVICE] ⚠️ Erro ao deletar evento do Calendar: $e');
-        }
+      // FASE 2: Deleta evento do Google Calendar se existir (apenas se online, em background)
+      if (task != null && task.calendarEventId != null && isOnline) {
+        _calendarService.isCalendarEnabled().then((enabled) {
+          if (enabled) {
+            _calendarService.deleteCalendarEvent(task!.calendarEventId!).catchError((e) {
+              print('[TASK DELETE] ⚠️ Erro ao deletar evento do Calendar: $e');
+            });
+          }
+        }).catchError((e) {
+          print('[TASK DELETE] ⚠️ Erro ao verificar Calendar: $e');
+        });
       }
       
-      // SEMPRE deleta do Isar PRIMEIRO (fonte primária)
-      await _syncService.deleteTaskLocally(taskId);
       
-      // Se online, também deleta do Firestore
-      if (isOnline) {
-        try {
-          await _taskRepository.deleteTask(user.uid, taskId);
-        } catch (e) {
-          print('[TASK SERVICE] ⚠️ Erro ao deletar do Firestore (já deletado localmente): $e');
-        }
-      }
+      // Repository é a fonte única de verdade - deleta do Isar PRIMEIRO
+      await _taskRepository.deleteTask(user.uid, taskId);
     } catch (e) {
       print('[TASK SERVICE] ❌ Erro ao deletar tarefa: $e');
       throw Exception('Erro ao deletar tarefa: $e');
@@ -373,66 +372,22 @@ class TaskService {
     }).asyncMap((future) => future);
   }
 
-  /// Busca todas as tarefas ativas (não completadas) - OFFLINE-FIRST
-  /// SEMPRE lê PRIMEIRO do Isar (retorna imediatamente)
-  /// Sincroniza do Firestore em background quando online
-  Stream<List<TaskModel>> getActiveTasks() async* {
+  /// Busca todas as tarefas ativas (não completadas) - OFFLINE-FIRST REATIVO
+  /// Usa o stream do repositório (que usa Isar.watch()) para atualização automática
+  Stream<List<TaskModel>> getActiveTasks() {
     final user = _auth.currentUser;
     if (user == null) {
-      yield [];
-      return;
+      return Stream.value([]);
     }
 
-    // VERIFICA STATUS ONLINE PRIMEIRO (rápido, sem esperar timeout)
-    // Isso evita tentar conectar ao Firestore quando offline
-    final isOnlineCheck = await _syncService.isOnline().timeout(
-      const Duration(milliseconds: 500),
-      onTimeout: () {
-        print('[TASK SERVICE] Timeout ao verificar conectividade (assumindo OFFLINE)');
-        return false;
-      },
-    );
-
-    // OFFLINE-FIRST: Lê PRIMEIRO do Isar (fonte primária - retorna imediatamente)
-    try {
-      final localTasks = await _syncService.getTasksFromLocal();
-      final activeLocalTasks = localTasks.where((t) => !t.isCompleted).toList();
-      print('[TASK SERVICE] ✅ ${activeLocalTasks.length} tarefas ativas encontradas localmente (exibindo imediatamente)');
-      
-      // Emite dados locais imediatamente
-      yield activeLocalTasks;
-    } catch (e) {
-      print('[TASK SERVICE] ⚠️ Erro ao buscar tarefas locais: $e');
-      yield [];
-      return; // Para o stream se houver erro ao buscar localmente
-    }
-
-    // Se offline, NÃO tenta conectar ao Firestore - finaliza stream imediatamente
-    if (!isOnlineCheck) {
-      print('[TASK SERVICE] Offline - usando apenas dados locais do Isar (stream finalizado)');
-      return; // Finaliza stream imediatamente - não bloqueia UI
-    }
-
-    // Online: Usa stream do Repository (que já lê do Isar primeiro e sincroniza em background)
-    // getTasksStream() já implementa offline-first (lê Isar primeiro)
-    try {
-      await for (final tasks in _taskRepository.getTasksStream(user.uid)) {
-        try {
-          final activeTasks = tasks.where((t) => !t.isCompleted).toList();
-          
-          // Emite atualização quando sincronização completar
-          yield activeTasks;
-        } catch (e) {
-          print('[TASK SERVICE] ⚠️ Erro ao processar tarefas do stream: $e');
-          // Não emite novamente - mantém dados locais já emitidos
-        }
-      }
-    } catch (error, stackTrace) {
-      print('[TASK SERVICE] ⚠️ Erro no stream (mantendo dados locais): $error');
-      print('[TASK SERVICE] Stack trace: $stackTrace');
-      // Não emite novamente - já emitiu dados locais acima
-      return; // Finaliza o stream para evitar loops
-    }
+    // Usa o stream do repositório que já usa Isar.watch() para reatividade automática
+    // Filtra apenas tarefas não completadas
+    return _taskRepository.getTasksStream(user.uid).map((tasks) {
+      return tasks.where((t) => !t.isCompleted).toList();
+    }).handleError((error) {
+      print('[TASK SERVICE] ⚠️ Erro no stream de tarefas ativas: $error');
+      return <TaskModel>[];
+    });
   }
 
   /// Busca tarefas completadas

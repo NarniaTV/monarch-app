@@ -135,9 +135,9 @@ class _CreateTaskScreenState extends ConsumerState<CreateTaskScreen> {
       );
 
       final taskService = ref.read(taskServiceProvider);
-      final syncService = SyncService();
-      final isOnline = await syncService.isOnline();
       
+      // Apenas chama o create - Repository salva no Isar em ~10ms e libera a tela
+      // Sincronização com Firestore acontece em background
       await taskService.createTask(task);
 
       if (mounted) {
