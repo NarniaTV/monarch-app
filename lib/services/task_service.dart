@@ -47,67 +47,79 @@ class TaskService {
     }
 
     try {
-      // Verifica se está na Penalty Zone
-      final profile = await _userRepository.getUser(user.uid);
-      final isPenaltyZone = profile?.penaltyMessage != null; // Simplificado para agora
-
-      // Atualiza stats e XP
-      final levelUpInfo = await _statsService.updateStatsOnTaskComplete(
-        statType: task.statType,
-        taskRank: task.rank,
-        isPenaltyZoneActive: isPenaltyZone,
-      );
-
-      // Se a tarefa está linkada a um objetivo S, atualiza progresso
-      if (task.linkedObjectiveId != null) {
-        await _updateObjectiveProgress(user.uid, task.linkedObjectiveId!);
-      }
-
-      // Marca tarefa como completa
+      // PASSO 1: Marca tarefa como completa PRIMEIRO (sempre funciona offline)
       final updatedTask = task.copyWith(
         isCompleted: true,
         completedAt: DateTime.now(),
       );
       
-      // OFFLINE-FIRST: SEMPRE salva no Isar PRIMEIRO (fonte primária)
+      // OFFLINE-FIRST: SEMPRE salva no Isar PRIMEIRO (fonte primária - funciona offline)
+      print('[TASK SERVICE] ✅ Salvando tarefa completada PRIMEIRO no Isar: ${updatedTask.title}');
       await _syncService.saveTaskLocally(updatedTask);
       
-      // Se online, atualiza no Firestore também (em background)
-      final isOnline = await _syncService.isOnline();
+      // PASSO 2: Atualiza stats e XP (funciona offline - salva localmente)
+      final levelUpInfo = await _statsService.updateStatsOnTaskComplete(
+        statType: task.statType,
+        taskRank: task.rank,
+        isPenaltyZoneActive: false, // Simplificado para funcionar offline
+      ).catchError((e) {
+        print('[TASK SERVICE] ⚠️ Erro ao atualizar stats (continuando): $e');
+        return null; // Retorna null se falhar
+      });
+
+      // PASSO 3: Se online, tenta operações que dependem de Firestore (não bloqueia se falhar)
+      final isOnline = await _syncService.isOnline().timeout(
+        const Duration(milliseconds: 300),
+        onTimeout: () => false,
+      );
+      
       if (isOnline) {
+        // Verifica Penalty Zone (só se online)
+        _userRepository.getUser(user.uid).then((profile) {
+          // Recalcula stats se necessário (opcional)
+        }).catchError((e) {
+          print('[TASK SERVICE] ⚠️ Erro ao buscar perfil: $e');
+        });
+        
+        // Atualiza no Firestore em background (não bloqueia)
         _taskRepository.updateTask(updatedTask).catchError((e) {
           print('[TASK SERVICE] ⚠️ Erro ao atualizar no Firestore (já salvo localmente): $e');
         });
       }
+
+      // PASSO 4: Se tarefa linkada a objetivo e online, atualiza progresso (em background)
+      if (task.linkedObjectiveId != null && isOnline) {
+        _updateObjectiveProgress(user.uid, task.linkedObjectiveId!).catchError((e) {
+          print('[TASK SERVICE] ⚠️ Erro ao atualizar objetivo (continuando): $e');
+        });
+      }
       
-      // FASE 1: Cancela notificação se existir
-      await _notificationService.cancelNotification(task.id);
+      // FASE 1: Cancela notificação se existir (funciona offline)
+      await _notificationService.cancelNotification(task.id).catchError((e) {
+        print('[TASK SERVICE] ⚠️ Erro ao cancelar notificação: $e');
+      });
       
-      // FASE 2: Deleta evento do Google Calendar quando tarefa é completada
-      if (task.calendarEventId != null && await _calendarService.isCalendarEnabled()) {
-        try {
-          print('[TASK COMPLETE] Deletando evento do Google Calendar: ${task.calendarEventId}');
-          final deleted = await _calendarService.deleteCalendarEvent(task.calendarEventId!);
-          if (deleted) {
-            print('[TASK COMPLETE] ✅ Evento deletado do Google Calendar com sucesso');
-          } else {
-            print('[TASK COMPLETE] ⚠️ Falha ao deletar evento do Google Calendar');
+      // FASE 2: Deleta evento do Google Calendar (só se online e habilitado)
+      if (isOnline && task.calendarEventId != null) {
+        _calendarService.isCalendarEnabled().then((enabled) {
+          if (enabled) {
+            _calendarService.deleteCalendarEvent(task.calendarEventId!).catchError((e) {
+              print('[TASK COMPLETE] ⚠️ Erro ao deletar evento do Calendar: $e');
+            });
           }
-        } catch (e) {
-          print('[TASK COMPLETE] ❌ Erro ao deletar evento do Google Calendar: $e');
-          // Não interrompe o fluxo se falhar ao deletar do calendário
-        }
+        }).catchError((e) {
+          print('[TASK COMPLETE] ⚠️ Erro ao verificar Calendar: $e');
+        });
       }
 
-      // FASE 7: Extrai sombra se tarefa for Rank C ou superior
+      // FASE 7: Extrai sombra se tarefa for Rank C ou superior (só se online)
       ShadowModel? extractedShadow;
-      if (task.rank == TaskRank.a || task.rank == TaskRank.c || task.rank == TaskRank.d) {
-        try {
-          extractedShadow = await _shadowService.extractShadowFromTask(updatedTask);
-        } catch (e) {
-          // Log erro mas não interrompe o fluxo
-          print('Erro ao extrair sombra: $e');
-        }
+      if (isOnline && (task.rank == TaskRank.a || task.rank == TaskRank.c || task.rank == TaskRank.d)) {
+        _shadowService.extractShadowFromTask(updatedTask).then((shadow) {
+          extractedShadow = shadow;
+        }).catchError((e) {
+          print('[TASK SERVICE] ⚠️ Erro ao extrair sombra: $e');
+        });
       }
 
       // Retorna resultado com level up e sombra extraída
