@@ -1,0 +1,90 @@
+{
+  "project_info": {
+    "project_number": "804086085402",
+    "project_id": "monarch-ap",
+    "storage_bucket": "monarch-ap.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:804086085402:android:09608c0c11715b75585ea3",
+        "android_client_info": {
+          "package_name": "com.example.monarch"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "804086085402-083jdldgr5o5hojt02anpoc2eupq64en.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDIMDACvXox5BfCbs9sdhPijDgvLcHHYpE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "804086085402-083jdldgr5o5hojt02anpoc2eupq64en.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "804086085402-c5jee44v6ech7lu460atbcg80c0behm0.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.monarch"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:804086085402:android:fa376b6fff343738585ea3",
+        "android_client_info": {
+          "package_name": "monarch.ap"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "804086085402-jc70la1pq4hgjfba5n8gjfuetib6vq4g.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "monarch.ap",
+            "certificate_hash": "c2ddd123c0a23847fa4b3c29c98062ca219a6ccd"
+          }
+        },
+        {
+          "client_id": "804086085402-083jdldgr5o5hojt02anpoc2eupq64en.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDIMDACvXox5BfCbs9sdhPijDgvLcHHYpE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "804086085402-083jdldgr5o5hojt02anpoc2eupq64en.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "804086085402-c5jee44v6ech7lu460atbcg80c0behm0.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.monarch"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

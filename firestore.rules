@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function para verificar se o usuário está autenticado
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function para verificar se o usuário é o dono do documento
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Collection: users
+    match /users/{userId} {
+      // Usuário pode criar sua própria conta (durante cadastro)
+      allow create: if request.auth.uid == userId;
+      
+      // Usuário pode ler/atualizar/deletar apenas seus próprios dados
+      allow read, update, delete: if isOwner(userId);
+      
+      // Subcollections do usuário
+      match /objectives/{objectiveId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      match /trophies/{trophyId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      match /tasks/{taskId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      match /daily_quests/{questId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      match /shadows/{shadowId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      match /penalty_state/{stateId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+    
+    // Permite queries na coleção users para verificação de nickname
+    // Apenas para usuários autenticados e com limite de 1 resultado
+    match /users/{document=**} {
+      allow list: if isAuthenticated() && request.query.limit <= 1;
+    }
+  }
+}

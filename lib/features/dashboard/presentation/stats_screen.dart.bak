@@ -1,0 +1,474 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:go_router/go_router.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../../../core/widgets/tactical_background.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../models/user_profile_model.dart';
+import '../../../repositories/user_repository.dart';
+import '../../../services/stats_service.dart';
+
+/// Tela de visualização de Stats (Power/Mind/Spirit) e XP/Level
+class StatsScreen extends ConsumerWidget {
+  const StatsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const Scaffold(
+        body: Center(child: Text('Usuário não autenticado')),
+      );
+    }
+
+    final userRepository = UserRepository();
+    final statsService = StatsService();
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          // Background tático
+          const TacticalBackground(),
+
+          // Conteúdo
+          SafeArea(
+            child: Column(
+              children: [
+                // AppBar
+                _buildAppBar(context),
+
+                // Conteúdo scrollável
+                Expanded(
+                  child: FutureBuilder<UserProfileModel?>(
+                    future: userRepository.getUser(user.uid),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(
+                          child: CircularProgressIndicator(color: AppColors.cyan),
+                        );
+                      }
+
+                      if (snapshot.hasError) {
+                        return Center(
+                          child: Text(
+                            'Erro ao carregar perfil: ${snapshot.error}',
+                            style: GoogleFonts.shareTechMono(color: Colors.red),
+                          ),
+                        );
+                      }
+
+                      final profile = snapshot.data;
+                      if (profile == null) {
+                        return Center(
+                          child: Text(
+                            'Perfil não encontrado',
+                            style: GoogleFonts.shareTechMono(color: Colors.red),
+                          ),
+                        );
+                      }
+
+                      // Calcula progresso de level
+                      final levelProgress = statsService.calculateLevelProgress(
+                        profile.currentXp,
+                        profile.level,
+                      );
+                      final xpForNextLevel = statsService.calculateXpForNextLevel(
+                        profile.level,
+                      );
+
+                      return SingleChildScrollView(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Level e XP
+                            _buildLevelCard(
+                              profile.level,
+                              profile.currentXp,
+                              xpForNextLevel,
+                              levelProgress,
+                            ),
+                            const SizedBox(height: 24),
+
+                            // Stats (Power, Mind, Spirit)
+                            _buildSectionTitle('// ATRIBUTOS'),
+                            const SizedBox(height: 16),
+                            _buildStatBar(
+                              'POWER',
+                              profile.power,
+                              Colors.red,
+                              Icons.fitness_center,
+                            ),
+                            const SizedBox(height: 12),
+                            _buildStatBar(
+                              'MIND',
+                              profile.mind,
+                              Colors.blue,
+                              Icons.psychology,
+                            ),
+                            const SizedBox(height: 12),
+                            _buildStatBar(
+                              'SPIRIT',
+                              profile.spirit,
+                              Colors.green,
+                              Icons.self_improvement,
+                            ),
+                            const SizedBox(height: 24),
+
+                            // Totais
+                            _buildSectionTitle('// ESTATÍSTICAS GERAIS'),
+                            const SizedBox(height: 16),
+                            _buildTotalStats(profile.power, profile.mind, profile.spirit),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAppBar(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.7),
+        border: Border(
+          bottom: BorderSide(
+            color: AppColors.cyan.withValues(alpha: 0.3),
+            width: 1,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back, color: AppColors.cyan),
+            onPressed: () => context.pop(),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'STATS',
+            style: GoogleFonts.orbitron(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Text(
+      title,
+      style: GoogleFonts.shareTechMono(
+        color: AppColors.cyan.withValues(alpha: 0.7),
+        fontSize: 11,
+        letterSpacing: 1,
+      ),
+    );
+  }
+
+  Widget _buildLevelCard(
+    int level,
+    int currentXp,
+    int xpForNextLevel,
+    double progress,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F1115),
+        border: Border.all(
+          color: AppColors.cyan.withValues(alpha: 0.5),
+          width: 2,
+        ),
+        borderRadius: const BorderRadius.all(Radius.circular(12)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.cyan.withValues(alpha: 0.2),
+            blurRadius: 20,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Level
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'LEVEL',
+                style: GoogleFonts.orbitron(
+                  color: AppColors.cyan,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                '$level',
+                style: GoogleFonts.orbitron(
+                  color: Colors.white,
+                  fontSize: 48,
+                  fontWeight: FontWeight.bold,
+                  height: 1,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          // XP Bar
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'EXPERIÊNCIA',
+                    style: GoogleFonts.shareTechMono(
+                      color: Colors.white70,
+                      fontSize: 11,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  Text(
+                    '$currentXp / $xpForNextLevel XP',
+                    style: GoogleFonts.shareTechMono(
+                      color: AppColors.cyan,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: Stack(
+                  children: [
+                    // Background
+                    Container(
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: Colors.white10,
+                        border: Border.all(
+                          color: AppColors.cyan.withValues(alpha: 0.3),
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    // Progress
+                    FractionallySizedBox(
+                      widthFactor: progress,
+                      child: Container(
+                        height: 12,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              AppColors.cyan,
+                              AppColors.cyan.withValues(alpha: 0.7),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  '${(progress * 100).toStringAsFixed(1)}% para próximo level',
+                  style: GoogleFonts.shareTechMono(
+                    color: Colors.white54,
+                    fontSize: 10,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatBar(String label, int value, Color color, IconData icon) {
+    // Progresso visual baseado em valor (máximo arbitrário de 100 para visualização)
+    final progress = (value / 100).clamp(0.0, 1.0);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F1115),
+        border: Border.all(
+          color: color.withValues(alpha: 0.3),
+          width: 1,
+        ),
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: GoogleFonts.orbitron(
+                  color: color,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '$value',
+                style: GoogleFonts.orbitron(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: Stack(
+              children: [
+                Container(
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: Colors.white10,
+                    border: Border.all(
+                      color: color.withValues(alpha: 0.3),
+                      width: 1,
+                    ),
+                  ),
+                ),
+                FractionallySizedBox(
+                  widthFactor: progress,
+                  child: Container(
+                    height: 8,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          color,
+                          color.withValues(alpha: 0.6),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTotalStats(int power, int mind, int spirit) {
+    final total = power + mind + spirit;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F1115),
+        border: Border.all(
+          color: AppColors.cyan.withValues(alpha: 0.3),
+          width: 1,
+        ),
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildStatSummary('POWER', power, Colors.red),
+              Container(
+                width: 1,
+                height: 40,
+                color: Colors.white24,
+              ),
+              _buildStatSummary('MIND', mind, Colors.blue),
+              Container(
+                width: 1,
+                height: 40,
+                color: Colors.white24,
+              ),
+              _buildStatSummary('SPIRIT', spirit, Colors.green),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Divider(color: Colors.white24),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'TOTAL:',
+                style: GoogleFonts.orbitron(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  letterSpacing: 1,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                '$total',
+                style: GoogleFonts.orbitron(
+                  color: AppColors.cyan,
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatSummary(String label, int value, Color color) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.shareTechMono(
+            color: color,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '$value',
+          style: GoogleFonts.orbitron(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
+  }
+}
